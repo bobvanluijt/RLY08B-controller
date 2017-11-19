@@ -7,7 +7,7 @@ Needed lib: `usblib`
 
 # Getting binaries
 
-Don't want to compile? No worries, bins are here: https://github.com/bobvanluijt/RLY08B-controller/releases
+Don't want to compile? No worries, bins are here: https://github.com/bobvanluijt/RLY08B-controller/tree/master/dist
 
 # Running from command line
 
