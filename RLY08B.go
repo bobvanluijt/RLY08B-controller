@@ -1,75 +1,113 @@
+// Golang implementation of the RLY08B
+// https://github.com/bobvanluijt/RLY08B-controller
+// MIT
+
 package main
 
 import (
 	"flag"
+	"io"
 	"log"
-
-	"github.com/google/gousb" // https://godoc.org/github.com/google/gousb
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
 )
+
+// global variables
+var DEFAULTDEVICE = "/dev/cu.usbmodem00036401"
+
+// execute on the actual devices
+func execOnDevice(d string, c int) error {
+
+	// open the device
+	f, err := os.OpenFile(d, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0777)
+	if err != nil {
+		return err
+	}
+
+	// write the command
+	w, err := f.Write([]byte{byte(c)})
+	if err != nil {
+		return err
+	}
+
+	// print succes log
+	log.Println("Command ", int(c), " (", w, " bytes) delivered successful.")
+
+	// Sync, flush
+	f.Sync()
+
+	// Close the file
+	f.Close()
+
+	// success
+	return nil
+}
+
+// get command
+func parseCommand(w http.ResponseWriter, r *http.Request) {
+
+	// validate if POST
+	if r.Method == "POST" {
+
+		// check if device is POSTed
+		var device string
+		if r.Header.Get("device") != "" {
+			device = r.Header.Get("device")
+		} else {
+			device = DEFAULTDEVICE
+		}
+
+		// find /command/ at index 0
+		index := strings.Index(r.URL.String(), "/command/")
+		if int(index) != 0 {
+			io.WriteString(w, "No command found!")
+		} else {
+			// Validate the command
+			commandMap := strings.Split(r.URL.String(), "/")
+			command, err := strconv.ParseInt(commandMap[2], 0, 8)
+			if err != nil {
+				io.WriteString(w, "Whoops, wrong command! Check: http://www.robot-electronics.co.uk/htm/usb_rly08btech.htm for a list of commands")
+			}
+			// check if command is in the correct range: http://www.robot-electronics.co.uk/htm/usb_rly08btech.htm
+			if command >= 100 && command <= 118 {
+				err := execOnDevice(device, int(command))
+				if err != nil {
+					io.WriteString(w, "Whoops, something went wrong. Check the web server log")
+				}
+			} else {
+				io.WriteString(w, "Whoops, wrong command! Check: http://www.robot-electronics.co.uk/htm/usb_rly08btech.htm for a list of commands")
+			}
+		}
+	}
+
+}
 
 func main() {
 
 	// get Flags and set custom variables if needed
-	rawCOM := flag.Int64("command", 101, "Set a command based Based on the commands: http://www.robot-electronics.co.uk/htm/usb_rly08btech.htm")
-	rawVID := flag.Int64("vid", 0x04d8, "Add the VID of the usb device.")
-	rawPID := flag.Int64("pid", 0xffee, "Add the PID of the usb device.")
+	rawCOM := flag.Int("command", 100, "Set a command based Based on the commands: http://www.robot-electronics.co.uk/htm/usb_rly08btech.htm")
+	rawDevice := flag.String("device", DEFAULTDEVICE, "Set the device.")
+	webservice := flag.Bool("webservice", false, "Run as web-service? (true or false)")
 	flag.Parse()
 
-	// get COM (= command)
-	COM := gousb.ID(*rawCOM)
+	// if the webservice is defined, execute it
+	if *webservice == true {
 
-	// get VID
-	VID := gousb.ID(*rawVID)
-	log.Println("Running with VID: ", VID)
+		// run the webservice
+		log.Println("Webservice running on localhost:8080")
+		http.HandleFunc("/", parseCommand)
+		http.ListenAndServe(":8080", nil)
 
-	// get PID
-	PID := gousb.ID(*rawPID)
-	log.Println("Running with PID: ", PID)
+	} else {
 
-	// Based on the commands: http://www.robot-electronics.co.uk/htm/usb_rly08btech.htm
-	data := make([]byte, 5)
-	data[0] = byte(COM) // see command list from url
+		// run command line interface
+		err := execOnDevice(*rawDevice, *rawCOM)
+		if err != nil {
+			log.Panic("Error while executing %v", err)
+		}
 
-	// Initialize a new Context.
-	ctx := gousb.NewContext()
-	defer ctx.Close()
-
-	// Open any device with a given VID/PID using a convenience function.
-	// found via: `$ system_profiler -xml SPUSBDataType``
-	dev, err := ctx.OpenDeviceWithVIDPID(VID, PID)
-	if err != nil {
-		log.Fatalf("Could not open a device: %v", err)
 	}
-	defer dev.Close()
-
-	// Switch the configuration to #1.
-	cfg, err := dev.Config(1)
-	if err != nil {
-		log.Fatalf("%s.Config(1): %v", dev, err)
-	}
-	defer cfg.Close()
-
-	// In the config #1, claim interface #1 with alt setting #0.
-	intf, err := cfg.Interface(1, 0)
-	if err != nil {
-		log.Fatalf("%s.Interface(1, 0): %v", cfg, err)
-	}
-	defer intf.Close()
-
-	// set writing endpoint
-	ep, err := intf.OutEndpoint(0x02)
-	if err != nil {
-		log.Fatalf("%s.OutEndpoint(2): %v", intf, err)
-	}
-
-	// Write data to the USB device.
-	numBytes, err := ep.Write(data)
-
-	// check if success
-	if numBytes != 5 {
-		log.Fatalf("%s.Write([5]): only %d bytes written, returned error is %v", ep, numBytes, err)
-	}
-
-	log.Println("Command ", COM, " delivered successful")
 
 }
